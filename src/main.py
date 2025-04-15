@@ -1,4 +1,3 @@
-# %%
 import tobii_research as tr
 from psychopy import visual, core, event
 import psychopy_tobii_controller
