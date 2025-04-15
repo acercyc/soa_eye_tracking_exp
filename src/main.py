@@ -658,7 +658,7 @@ class DataManager:
             self.file = None
 
 
-def run_exp_test(controller_type='tobii', target_type='image'):
+def run_exp(controller_type='tobii', target_type='image'):
     # generate design parameters
     design = Design(number_of_trial=config["design"]["number_of_trial"])
     moving_mode_seq = design.gen_design_interleaved()
@@ -861,5 +861,5 @@ def run_exp_test(controller_type='tobii', target_type='image'):
 
 
 if __name__ == "__main__":
-    run_exp_test(
+    run_exp(
         controller_type=config["controller"]['type'], target_type='image')

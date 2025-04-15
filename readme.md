@@ -31,7 +31,7 @@ The experiment presents a visual target that moves according to different algori
 The experiment is configured through the `para` dictionary in the main script:
 
 ```python
-para = {
+config = {
     "design": {
         "presentation_duration": 10,  # in seconds
         "number_of_presentations": 10
