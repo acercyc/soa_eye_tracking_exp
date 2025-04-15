@@ -4,18 +4,20 @@ import psychopy_tobii_controller
 from abc import ABC, abstractmethod
 import numpy as np
 import os
+import datetime
+import json
 
-para = {
+config = {
     "design": {
-        "presentation_duration": 10,  # in seconds
-        "number_of_presentations": 10
+        "trial_duration": 10,  # in seconds
+        "number_of_trial": 20
     },
     "experiment": {
         "fullscreen": True,
-        "show_pos_indicator": True,  # Show position indicator on the screen
+        "show_pos_indicator": False,  # Show position indicator on the screen
     },
     "controller": {
-        "type": "mouse",  # Options: 'mouse' or 'tobii'
+        "type": "tobii",  # Options: 'mouse' or 'tobii'
     },
     "tobii": {
         "calibration": True,  # Whether to perform calibration
@@ -29,12 +31,13 @@ para = {
 
 
 # create data directory if not exist
-data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data'))
-if not os.path.exists(data_dir):
-    os.makedirs(data_dir)
-    print(f"Data directory created: {data_dir}")
+data_folder = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '../data'))
+if not os.path.exists(data_folder):
+    os.makedirs(data_folder)
+    print(f"Data directory created: {data_folder}")
 else:
-    print(f"Data directory already exists: {data_dir}")
+    print(f"Data directory already exists: {data_folder}")
 
 
 # Get all image file paths in the /image directory
@@ -183,17 +186,17 @@ def process_gaze_position(current_gaze_position, last_gaze_position):
 
 
 class Design:
-    def __init__(self, number_of_presentations=10):
-        self.number_of_presentations = number_of_presentations
+    def __init__(self, number_of_trial=10):
+        self.number_of_trial = number_of_trial
         self.moving_mode_seq = None
 
     def gen_design_interleaved(self):
         """
-        Interleaves bouncing/organic mode and locking mode presentations.
+        Interleaves bouncing/organic mode and locking mode trials.
         E.g., bouncing, locking, organic, locking, bouncing, locking, organic, locking...
         """
         moving_mode_seq = []
-        for i in range(self.number_of_presentations):
+        for i in range(self.number_of_trial):
             if i % 2 == 0:
                 # Even index: bouncing or organic mode
                 if i % 4 == 0:
@@ -231,11 +234,11 @@ class Design:
             mode: stimulus_indexes[i] for i, mode in enumerate(unique_modes)}
 
         # Create the full stimulus sequence by mapping each moving mode to its assigned stimulus
-        stimulus_sequence = [self.moving_mode_to_stimulus[mode]
-                             for mode in self.moving_mode_seq]
-        self.stimulus_sequence = stimulus_sequence
+        stimulus_seq = [self.moving_mode_to_stimulus[mode]
+                        for mode in self.moving_mode_seq]
+        self.stimulus_sequence = stimulus_seq
 
-        return stimulus_sequence
+        return stimulus_seq
 
 
 class MovingMode(ABC):
@@ -247,7 +250,8 @@ class MovingMode(ABC):
     """
 
     def __init__(self):
-        self.pos = np.array((0.0, 0.0), dtype=np.float64)  # Initial position of the target as float64
+        # Initial position of the target as float64
+        self.pos = np.array((0.0, 0.0), dtype=np.float64)
 
     @abstractmethod
     def update(self):
@@ -260,7 +264,8 @@ class MovingMode(ABC):
         """
         Abstract method to reset the target's parameters except position.
         """
-        self.pos = np.array(pos, dtype=np.float64)  # Ensure position is float64
+        self.pos = np.array(
+            pos, dtype=np.float64)  # Ensure position is float64
 
 
 class MovingMode_locking(MovingMode):
@@ -502,7 +507,7 @@ class Target_image(Target):
         else:
             self.images = images
         self.win = win
-        self.scale = scale  # Scaling factor for the image
+        self.scale = scale
         self.image = visual.ImageStim(
             win, image=self.images[0] if self.images else None, size=scale)
 
@@ -533,15 +538,17 @@ class Controller:
                 win=win)
         elif controller_type == 'mouse':
             self.mouse = event.Mouse()
+        else:
+            raise ValueError(
+                "Invalid controller type. Use 'mouse' or 'tobii'.")
 
-        self.last_pos = np.array([0, 0])  # Initialize last position
-        self.isNoData = False  # Initialize no data flag
+        self.last_pos = np.array([0, 0])
+        self.isNoData = False
 
     def get_pos(self):
         if self.controller_type == 'tobii':
             current_pos = self.tobii_controller.get_current_gaze_position()
-            print(f"Current gaze position: {current_pos}")
-            # Process gaze position data
+            current_pos = np.array(current_pos, dtype=np.float64)
             current_pos, no_eye_data = process_gaze_position(
                 current_pos, self.last_pos)
             self.isNoData = no_eye_data
@@ -549,26 +556,130 @@ class Controller:
         elif self.controller_type == 'mouse':
             current_pos = self.mouse.getPos()
 
-        self.last_pos = current_pos  # Update last position
+        self.last_pos = current_pos
         return current_pos
+
+    def record_event(self, event):
+        """
+        Record an event to the data file.
+        """
+        if self.controller_type == 'tobii':
+            self.tobii_controller.record_event(event)
+        elif self.controller_type == 'mouse':
+            pass
+        print(f"Event recorded: {event}")
+
+
+class DataManager:
+    def __init__(self, data_folder):
+        self.data_path_exp = None
+        self.data_path_tobii = None
+        self.data_path_config = None
+        self.data_folder = data_folder
+        self.date = datetime.datetime.today().strftime("%Y%m%d%H%M")
+        self.iDataEntry = 0  # Initialize iEntry to 0
+        self.file = None
+
+    def enter_subj_id(self):
+        """
+        input subjectID from CLI
+        """
+        subjectID = input("Enter subject ID: ")
+        if not subjectID:
+            raise ValueError("Subject ID cannot be empty.")
+        self.data_path_exp = os.path.join(
+            self.data_folder, f"{subjectID}_exp_{self.date}.csv")
+        self.data_path_tobii = os.path.join(
+            self.data_folder, f"{subjectID}_tobii_{self.date}.tsv")
+        self.data_path_config = os.path.join(
+            self.data_folder, f"{subjectID}_config_{self.date}.json")
+        print(f"Data paths set: {self.data_path_exp}, {self.data_path_tobii}, {self.data_path_config}")
+        
+    def save_config(self, config):
+        """
+        Save the configuration to a JSON file.
+        """
+        try:
+            with open(self.data_path_config, 'w') as f:
+                json.dump(config, f, indent=4)
+            print(f"Configuration saved to: {self.data_path_config}")
+        except Exception as e:
+            print(f"Error saving configuration: {e}")
+
+    def log_data(self, frame_data):
+        """
+        Log frame data directly to the experiment data file.
+        frame_data: dict containing data to log
+
+        This method streams data directly to a file without keeping everything in memory.
+        """
+        # Open the file if not already open
+        if self.file is None:
+            try:
+                # Open file for writing
+                self.file = open(self.data_path_exp, 'w')
+                print(f"Opened data file for writing: {self.data_path_exp}")
+            except Exception as e:
+                print(f"Error opening data file: {e}")
+                return
+
+        # Write header if this is the first entry (iDataEntry == 0)
+        if self.iDataEntry == 0:
+            # Get column names from the dictionary keys
+            header = ','.join(frame_data.keys())
+            self.file.write(header + '\n')
+
+        # Convert values to strings and write to file
+        values = []
+        for value in frame_data.values():
+            if isinstance(value, str):
+                # Escape commas in strings by wrapping in quotes
+                values.append(f'"{value}"')
+            else:
+                values.append(str(value))
+
+        # Write the values as a CSV row
+        row = ','.join(values)
+        self.file.write(row + '\n')
+
+        # Flush buffer to ensure data is written immediately
+        self.file.flush()
+
+        # Increment entry counter
+        self.iDataEntry += 1
+
+    def close_file(self):
+        """
+        Close the data file.
+        """
+        if self.file is not None:
+            self.file.close()
+            print(f"Data file closed: {self.data_path_exp}")
+            self.file = None
 
 
 def run_exp_test(controller_type='tobii', target_type='image'):
-
     # generate design parameters
-    design = Design(
-        number_of_presentations=para["design"]["number_of_presentations"])
+    design = Design(number_of_trial=config["design"]["number_of_trial"])
     moving_mode_seq = design.gen_design_interleaved()
-    stimulus_sequence = design.assign_stim_to_moving_mode()
-    print(f"Moving mode sequence: {moving_mode_seq}")
-    print(f"Stimulus sequence: {stimulus_sequence}")
+    stimulus_seq = design.assign_stim_to_moving_mode()
+
+    # ------------------------------ Initialisation ------------------------------ #
+    current_pos = np.array([0, 0])  # Initial position of the target
+
+    # Initialize data manager and input subject ID
+    data_manager = DataManager(data_folder)
+    data_manager.enter_subj_id()
+    data_manager.save_config(config)
 
     # Create a psychopy window
-    win = visual.Window(units='height', monitor='default',
-                        fullscr=para["experiment"]["fullscreen"], colorSpace='rgb255', color=(100, 100, 100))
+    win = visual.Window(units='height',
+                        monitor='default',
+                        fullscr=config["experiment"]["fullscreen"], colorSpace='rgb255',
+                        color=(100, 100, 100))
 
     # Hide the mouse if in fullscreen mode
-    if para["experiment"]["fullscreen"]:
+    if config["experiment"]["fullscreen"]:
         win.mouseVisible = False
         event.Mouse(visible=False)
 
@@ -585,7 +696,7 @@ def run_exp_test(controller_type='tobii', target_type='image'):
 
     # Initialize position indicator if enabled
     pos_indicator = None
-    if para["experiment"]["show_pos_indicator"]:
+    if config["experiment"]["show_pos_indicator"]:
         pos_indicator = visual.Circle(
             win,
             radius=0.005,  # Small radius for the indicator
@@ -595,8 +706,23 @@ def run_exp_test(controller_type='tobii', target_type='image'):
             autoLog=False  # Disable logging for performance
         )
 
+    # initialise text stimulus for instructions
+    instructions = visual.TextStim(
+        win,
+        text="Press 'escape' to exit",
+        pos=(0, 0),
+        color='white',
+        height=0.05
+    )
+
+    # Initialize all moving modes with speed from para
+    locking_mode = MovingMode_locking(win)
+    bouncing_mode = MovingMode_bouncing(win, speed=config["stimulus"]["speed"])
+    organic_mode = MovingMode_organic(win, speed=config["stimulus"]["speed"])
+
+    # -------------------------------- calibration ------------------------------- #
     # Run Tobii calibration if using the eye tracker and calibration is enabled
-    if controller_type == 'tobii' and para["tobii"]["calibration"]:
+    if controller_type == 'tobii' and config["tobii"]["calibration"]:
         # Message about calibration
         calib_msg = visual.TextStim(
             win,
@@ -612,7 +738,7 @@ def run_exp_test(controller_type='tobii', target_type='image'):
         # Run calibration with specified number of points
         calib_result = run_tobii_calibration(
             controller.tobii_controller,
-            para["tobii"]["calibration_points"]
+            config["tobii"]["calibration_points"]
         )
 
         # Handle calibration result
@@ -621,42 +747,25 @@ def run_exp_test(controller_type='tobii', target_type='image'):
             core.quit()
             return
 
-    # initialise text stimulus for instructions
-    instructions = visual.TextStim(
-        win,
-        text="Press 'escape' to exit",
-        pos=(0, 0),
-        color='white',
-        height=0.05
-    )
-
-    # Initialize all moving modes with speed from para
-    locking_mode = MovingMode_locking(win)
-    bouncing_mode = MovingMode_bouncing(win, speed=para["stimulus"]["speed"])
-    organic_mode = MovingMode_organic(win, speed=para["stimulus"]["speed"])
-
     # --------------------------- Start the experiment --------------------------- #
+    if controller_type == 'tobii':
+        # Start recording gaze data
+        controller.tobii_controller.open_datafile(
+            data_manager.data_path_tobii, embed_events=False)
+        controller.tobii_controller.subscribe()
 
-    # show welcome message and press space to start
+    # Record experiment start event
+    controller.record_event("Experiment started")
+
+    # welcome message
     instructions.setText("Welcome to the experiment!\nPress 'space' to start")
     instructions.draw()
     win.flip()
     event.waitKeys(keyList=['space'])
 
-    # Create a trial counter display
-    trial_counter = visual.TextStim(
-        win,
-        text=f"Trial: 1/{len(moving_mode_seq)}",
-        pos=(0, 0.4),
-        color='white',
-        height=0.03
-    )
-
-    current_pos = (0, 0)  # Initial position of the target
-    # Run trials for each mode in the sequence
-    for i, (mode, stim_idx) in enumerate(zip(moving_mode_seq, stimulus_sequence)):
-        # Update trial counter
-        trial_counter.setText(f"Trial: {i+1}/{len(moving_mode_seq)}")
+    for iTrial, (mode, stim_idx) in enumerate(zip(moving_mode_seq, stimulus_seq)):
+        # Record trial start event
+        controller.record_event(f"No.{iTrial} trial started")
 
         # Set the appropriate image for the target if using images
         if target_type == 'image':
@@ -673,21 +782,12 @@ def run_exp_test(controller_type='tobii', target_type='image'):
 
         current_mode.reset(current_pos)
 
-        # Display the current mode
-        mode_display = visual.TextStim(
-            win,
-            text=f"Mode: {mode}",
-            pos=(0, -0.4),
-            color='white',
-            height=0.03
-        )
-
-        # Run for the specified presentation duration
+        # Run for the specified trial duration
         start_time = core.getTime()
-        while core.getTime() - start_time < para["design"]["presentation_duration"]:
-            # Get controller position (mouse or eye tracker)
+        frame_num = 0
+        while core.getTime() - start_time < config["design"]["trial_duration"]:
+            # Get controller position
             controller_pos = controller.get_pos()
-            print(f"Controller position: {controller_pos}")
 
             # Update target position based on the current mode
             if mode == 'locking':
@@ -700,23 +800,44 @@ def run_exp_test(controller_type='tobii', target_type='image'):
 
             # Draw the target, trial counter, and mode display
             target.draw()
-            trial_counter.draw()
-            mode_display.draw()
 
             # Draw position indicator if enabled
-            if para["experiment"]["show_pos_indicator"]:
+            if config["experiment"]["show_pos_indicator"]:
                 pos_indicator.setPos(controller_pos)
                 pos_indicator.draw()
 
             # Check for escape key
             keys = event.getKeys()
             if 'escape' in keys:
+                controller.record_event("Experiment interrupted by user")
                 win.close()
                 core.quit()
                 return
 
-            # Update the display
+            # log data
+            frame_data = {
+                'eye_x': controller_pos[0],
+                'eye_y': controller_pos[1],
+                'stim_x': current_pos[0],
+                'stim_y': current_pos[1],
+                'no_eye_data': controller.isNoData,
+                'trial_num': iTrial,
+                'frame_num': frame_num,
+                'time': core.getTime(),
+                'time_trial': core.getTime() - start_time,
+                'moving_mode': mode,
+                'stimulus_index': stim_idx,
+            }
+            data_manager.log_data(frame_data)
+
+            frame_num += 1
             win.flip()
+
+        # Record trial end event
+        controller.record_event(f"No.{iTrial} trial ended")
+
+    # Record experiment completion event
+    controller.record_event("Experiment completed")
 
     # Show completion message
     instructions.setText("All trials completed!\nPress 'escape' to exit")
@@ -725,10 +846,20 @@ def run_exp_test(controller_type='tobii', target_type='image'):
 
     # Wait for escape key to exit
     event.waitKeys(keyList=['escape'])
+
+    # ---------------------------- close all resources --------------------------- #
+    # Clean up Tobii resources if using eye tracker
+    if controller_type == 'tobii':
+        controller.tobii_controller.unsubscribe()
+        controller.tobii_controller.close_datafile()
+
+    # Close the data file
+    data_manager.close_file()
+
     win.close()
     core.quit()
 
 
 if __name__ == "__main__":
-    run_exp_test(controller_type=para["controller"]
-                 ['type'], target_type='image')
+    run_exp_test(
+        controller_type=config["controller"]['type'], target_type='image')
