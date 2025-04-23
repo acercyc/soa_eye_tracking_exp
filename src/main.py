@@ -1,4 +1,3 @@
-import tobii_research as tr
 from psychopy import visual, core, event
 import psychopy_tobii_controller
 from abc import ABC, abstractmethod
@@ -6,6 +5,11 @@ import numpy as np
 import os
 import datetime
 import json
+import GazeStabilizer
+import threading
+import time
+from collections import deque
+
 
 config = {
     "design": {
@@ -20,8 +24,14 @@ config = {
         "type": "tobii",  # Options: 'mouse' or 'tobii'
     },
     "tobii": {
-        "calibration": True,  # Whether to perform calibration
+        "calibration": False,  # Whether to perform calibration
         "calibration_points": 5,  # Number of calibration points (5 or 9)
+        "stabilizer_type": "moving_average",  # Stabilizer type. none, 'moving_average'
+        "stabilizer_moving_average": {
+            "buffer_size": 100,  # Size of the moving average buffer
+            "sampling_rate": 1000,  # Sampling rate in Hz
+        },
+    
     },
     "stimulus": {
         "speed": 0.005,  # Speed of the target in bouncing mode
@@ -530,43 +540,96 @@ class Target_image(Target):
         self.image.draw()
 
 
-class Controller:
-    def __init__(self, controller_type='mouse', win=None):
-        self.controller_type = controller_type
-        if controller_type == 'tobii':
-            self.tobii_controller = psychopy_tobii_controller.tobii_controller(
-                win=win)
-        elif controller_type == 'mouse':
-            self.mouse = event.Mouse()
-        else:
-            raise ValueError(
-                "Invalid controller type. Use 'mouse' or 'tobii'.")
-
-        self.last_pos = np.array([0, 0])
-        self.isNoData = False
-
+class ControllerBase(ABC):
+    @abstractmethod
     def get_pos(self):
-        if self.controller_type == 'tobii':
-            current_pos = self.tobii_controller.get_current_gaze_position()
-            current_pos = np.array(current_pos, dtype=np.float64)
-            current_pos, no_eye_data = process_gaze_position(
-                current_pos, self.last_pos)
+        pass
+
+    @abstractmethod
+    def record_event(self, event):
+        pass
+
+
+class TobiiController(ControllerBase):
+    def __init__(self, win, stabilizer_type=None, 
+                 bg_sampling_rate=100, 
+                 bg_buffer_size=10):
+        self.tobii_controller = psychopy_tobii_controller.tobii_controller(win=win)
+        self.last_pos = np.array([0, 0], dtype=np.float64)
+        self.isNoData = False
+        self.stabilizer_type = stabilizer_type
+        self.win = win
+            
+        # background sampling parameters
+        self.bg_sampling_rate = bg_sampling_rate  # Hz
+        self.bg_buffer_size = bg_buffer_size
+        
+        if stabilizer_type == 'moving_average':
+            self._bg_on = threading.Event()
+            self.stabilizer = GazeStabilizer.MovingAverageStabilizer(bg_buffer_size)
+            self._bg_thread = threading.Thread(target=self._run_background_sampling, daemon=True)
+        else:
+            self.stabilizer = None
+            self._bg_thread = None        
+        
+    def subscribe(self, data_path_tobii=None):
+        self.tobii_controller.open_datafile(data_path_tobii, embed_events=False) 
+        self.tobii_controller.subscribe()
+        if self._bg_thread:
+            self._bg_on.set()  # Set the event to start background sampling
+            self._bg_thread.start()
+
+        
+    def unsubscribe(self):
+        self.tobii_controller.unsubscribe()
+        self.tobii_controller.close_datafile()
+        if self._bg_thread:
+            self._bg_on.clear()
+            self._bg_thread.join()
+        
+    def _run_background_sampling(self):
+        period = 1.0 / self.bg_sampling_rate
+        while self._bg_on.is_set():
+            # Get the current gaze position
+            pos = self.tobii_controller.get_current_gaze_position()
+            pos = np.array(pos, dtype=np.float64)
+            pos, no_eye_data = process_gaze_position(pos, self.last_pos)
             self.isNoData = no_eye_data
-
-        elif self.controller_type == 'mouse':
-            current_pos = self.mouse.getPos()
-
-        self.last_pos = current_pos
-        return current_pos
+            self.last_pos = pos
+            
+            # Apply the stabilizer if available
+            if self.stabilizer:
+                pos = self.stabilizer.stabilize(pos[0], pos[1])
+                
+            # wait for the next sampling period
+            time.sleep(period)
+        
+    def get_pos(self):
+        pos = self.tobii_controller.get_current_gaze_position()
+        pos = np.array(pos, dtype=np.float64)
+        pos, no_eye_data = process_gaze_position(pos, self.last_pos)
+        self.isNoData = no_eye_data
+        self.last_pos = pos
+        
+        # Apply the stabilizer if available
+        if self.stabilizer:
+            pos = self.stabilizer.stabilize(pos[0], pos[1])
+            pos = np.array(pos, dtype=np.float64)
+        return pos
 
     def record_event(self, event):
-        """
-        Record an event to the data file.
-        """
-        if self.controller_type == 'tobii':
-            self.tobii_controller.record_event(event)
-        elif self.controller_type == 'mouse':
-            pass
+        self.tobii_controller.record_event(event)
+        print(f"Event recorded: {event}")
+
+
+class MouseController(ControllerBase):
+    def __init__(self, win=None):
+        self.mouse = event.Mouse(win=win)
+
+    def get_pos(self):
+        return self.mouse.getPos()
+
+    def record_event(self, event):
         print(f"Event recorded: {event}")
 
 
@@ -692,7 +755,13 @@ def run_exp(controller_type='tobii', target_type='image'):
         raise ValueError("Invalid target type. Use 'circle' or 'image'.")
 
     # initialise controller
-    controller = Controller(controller_type=controller_type, win=win)
+    if controller_type == 'tobii':
+        controller = TobiiController(win=win, 
+                                     stabilizer_type=config["tobii"]["stabilizer_type"],
+                                     bg_sampling_rate=config["tobii"]["stabilizer_moving_average"]["sampling_rate"],
+                                     bg_buffer_size=config["tobii"]["stabilizer_moving_average"]["buffer_size"])
+    else:
+        controller = MouseController(win=win)
 
     # Initialize position indicator if enabled
     pos_indicator = None
@@ -750,9 +819,7 @@ def run_exp(controller_type='tobii', target_type='image'):
     # --------------------------- Start the experiment --------------------------- #
     if controller_type == 'tobii':
         # Start recording gaze data
-        controller.tobii_controller.open_datafile(
-            data_manager.data_path_tobii, embed_events=False)
-        controller.tobii_controller.subscribe()
+        controller.subscribe(data_manager.data_path_tobii)
 
     # Record experiment start event
     controller.record_event("Experiment started")
@@ -820,7 +887,7 @@ def run_exp(controller_type='tobii', target_type='image'):
                 'eye_y': controller_pos[1],
                 'stim_x': current_pos[0],
                 'stim_y': current_pos[1],
-                'no_eye_data': controller.isNoData,
+                'no_eye_data': controller.isNoData if controller_type == 'tobii' else False,
                 'trial_num': iTrial,
                 'frame_num': frame_num,
                 'time': core.getTime(),
@@ -850,8 +917,7 @@ def run_exp(controller_type='tobii', target_type='image'):
     # ---------------------------- close all resources --------------------------- #
     # Clean up Tobii resources if using eye tracker
     if controller_type == 'tobii':
-        controller.tobii_controller.unsubscribe()
-        controller.tobii_controller.close_datafile()
+        controller.unsubscribe()
 
     # Close the data file
     data_manager.close_file()

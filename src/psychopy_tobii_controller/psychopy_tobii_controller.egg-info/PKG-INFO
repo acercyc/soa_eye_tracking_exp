@@ -1,5 +1,5 @@
-Metadata-Version: 2.1
-Name: psychopy-tobii-controller
+Metadata-Version: 2.4
+Name: psychopy_tobii_controller
 Version: 1.2.0
 Summary: Tobii Controller for PsychoPy
 Home-page: https://github.com/hsogo/psychopy_tobii_controller/
@@ -17,6 +17,15 @@ Classifier: Operating System :: POSIX :: Linux
 Classifier: Programming Language :: Python
 Classifier: Topic :: Scientific/Engineering
 License-File: LICENSE
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: license-file
+Dynamic: summary
 
 
 psychopy_tobii_controller is a helper module to use tobii_research package from PsychoPy.
