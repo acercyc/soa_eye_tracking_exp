@@ -19,6 +19,7 @@ config = {
     "experiment": {
         "fullscreen": True,
         "show_pos_indicator": False,  # Show position indicator on the screen
+        "screen_margin": 0.05,  # Margin from the screen edge in height units
     },
     "controller": {
         "type": "tobii",  # Options: 'mouse' or 'tobii'
@@ -31,7 +32,7 @@ config = {
             "buffer_size": 100,  # Size of the moving average buffer
             "sampling_rate": 1000,  # Sampling rate in Hz
         },
-    
+
     },
     "stimulus": {
         "speed": 0.005,  # Speed of the target in bouncing mode
@@ -551,42 +552,43 @@ class ControllerBase(ABC):
 
 
 class TobiiController(ControllerBase):
-    def __init__(self, win, stabilizer_type=None, 
-                 bg_sampling_rate=100, 
-                 bg_buffer_size=10):
-        self.tobii_controller = psychopy_tobii_controller.tobii_controller(win=win)
+    def __init__(self, win, stabilizer_type=None):
+        self.tobii_controller = psychopy_tobii_controller.tobii_controller(
+            win=win)
         self.last_pos = np.array([0, 0], dtype=np.float64)
         self.isNoData = False
         self.stabilizer_type = stabilizer_type
         self.win = win
-            
-        # background sampling parameters
-        self.bg_sampling_rate = bg_sampling_rate  # Hz
-        self.bg_buffer_size = bg_buffer_size
-        
+
         if stabilizer_type == 'moving_average':
             self._bg_on = threading.Event()
-            self.stabilizer = GazeStabilizer.MovingAverageStabilizer(bg_buffer_size)
-            self._bg_thread = threading.Thread(target=self._run_background_sampling, daemon=True)
+            self.bg_sampling_rate = config["tobii"]["stabilizer_moving_average"]["sampling_rate"]
+            self.bg_buffer_size = config["tobii"]["stabilizer_moving_average"]["buffer_size"]
+            self.stabilizer = GazeStabilizer.MovingAverageStabilizer(
+                self.bg_buffer_size)
+            self._bg_thread = threading.Thread(
+                target=self._run_background_sampling, daemon=True)
         else:
             self.stabilizer = None
-            self._bg_thread = None        
-        
+            self._bg_thread = None
+            self.bg_sampling_rate = None
+            self.bg_buffer_size = None
+
     def subscribe(self, data_path_tobii=None):
-        self.tobii_controller.open_datafile(data_path_tobii, embed_events=False) 
+        self.tobii_controller.open_datafile(
+            data_path_tobii, embed_events=False)
         self.tobii_controller.subscribe()
         if self._bg_thread:
             self._bg_on.set()  # Set the event to start background sampling
             self._bg_thread.start()
 
-        
     def unsubscribe(self):
         self.tobii_controller.unsubscribe()
         self.tobii_controller.close_datafile()
         if self._bg_thread:
             self._bg_on.clear()
             self._bg_thread.join()
-        
+
     def _run_background_sampling(self):
         period = 1.0 / self.bg_sampling_rate
         while self._bg_on.is_set():
@@ -596,21 +598,21 @@ class TobiiController(ControllerBase):
             pos, no_eye_data = process_gaze_position(pos, self.last_pos)
             self.isNoData = no_eye_data
             self.last_pos = pos
-            
+
             # Apply the stabilizer if available
             if self.stabilizer:
                 pos = self.stabilizer.stabilize(pos[0], pos[1])
-                
+
             # wait for the next sampling period
             time.sleep(period)
-        
+
     def get_pos(self):
         pos = self.tobii_controller.get_current_gaze_position()
         pos = np.array(pos, dtype=np.float64)
         pos, no_eye_data = process_gaze_position(pos, self.last_pos)
         self.isNoData = no_eye_data
         self.last_pos = pos
-        
+
         # Apply the stabilizer if available
         if self.stabilizer:
             pos = self.stabilizer.stabilize(pos[0], pos[1])
@@ -656,8 +658,9 @@ class DataManager:
             self.data_folder, f"{subjectID}_tobii_{self.date}.tsv")
         self.data_path_config = os.path.join(
             self.data_folder, f"{subjectID}_config_{self.date}.json")
-        print(f"Data paths set: {self.data_path_exp}, {self.data_path_tobii}, {self.data_path_config}")
-        
+        print(
+            f"Data paths set: {self.data_path_exp}, {self.data_path_tobii}, {self.data_path_config}")
+
     def save_config(self, config):
         """
         Save the configuration to a JSON file.
@@ -756,10 +759,8 @@ def run_exp(controller_type='tobii', target_type='image'):
 
     # initialise controller
     if controller_type == 'tobii':
-        controller = TobiiController(win=win, 
-                                     stabilizer_type=config["tobii"]["stabilizer_type"],
-                                     bg_sampling_rate=config["tobii"]["stabilizer_moving_average"]["sampling_rate"],
-                                     bg_buffer_size=config["tobii"]["stabilizer_moving_average"]["buffer_size"])
+        controller = TobiiController(
+            win=win, stabilizer_type=config["tobii"]["stabilizer_type"])
     else:
         controller = MouseController(win=win)
 
@@ -849,12 +850,24 @@ def run_exp(controller_type='tobii', target_type='image'):
 
         current_mode.reset(current_pos)
 
-        # Run for the specified trial duration
+        # reset timer
         start_time = core.getTime()
         frame_num = 0
-        while core.getTime() - start_time < config["design"]["trial_duration"]:
+        effective_time = 0
+        current_time = 0
+        last_time = start_time
+        while effective_time < config["design"]["trial_duration"]:
+            # get time
+            current_time = core.getTime()
+            dt = current_time - last_time
+            last_time = current_time
+            
             # Get controller position
             controller_pos = controller.get_pos()
+            
+            # if no eye data is recorded, time is ignored
+            if not controller.isNoData:
+                effective_time += dt
 
             # Update target position based on the current mode
             if mode == 'locking':
