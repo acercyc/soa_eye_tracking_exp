@@ -36,6 +36,7 @@ config = {
     },
     "stimulus": {
         "speed": 0.005,  # Speed of the target in bouncing mode
+        "scale": 0.05,  # Scale of the target image
     },
 
 }
@@ -753,7 +754,7 @@ def run_exp(controller_type='tobii', target_type='image'):
     if target_type == 'circle':
         target = Target_circle(win)
     elif target_type == 'image':
-        target = Target_image(win)
+        target = Target_image(win, scale=config["stimulus"]["scale"])
     else:
         raise ValueError("Invalid target type. Use 'circle' or 'image'.")
 
