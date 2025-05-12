@@ -989,6 +989,9 @@ def run_exp(controller_type='tobii'):
     instructions.draw()
     win.flip()
     event.waitKeys(keyList=['space'])
+    
+    win.flip()
+    core.wait(2)
 
     for iTrial, mode in enumerate(moving_mode_seq):
         # Record trial start event

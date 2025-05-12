@@ -1,4 +1,3 @@
-# filepath: c:\Project\soa_eye_tracking_exp\src\main_exp_2.py
 from psychopy import visual, core, event
 import psychopy_tobii_controller
 from abc import ABC, abstractmethod
@@ -13,9 +12,9 @@ import time
 # Experiment 2 specific configuration
 config_exp2 = {
     "design_exp2": {
-        "N_trials_exp2": 20,  # Total number of trials for Experiment 2 (recommended to be multiple of 4)
-        "effective_trial_duration_exp2": 4.0,  # Duration per trial (seconds)
-        "sound_play_gaze_duration": 1.0  # Duration to trigger sound (seconds)
+        "number_of_trial_exp2": 20,  # Total number of trials for Experiment 2 (recommended to be multiple of 4)
+        "effective_trial_duration_exp2": 10.0,  # Duration per trial (seconds)
+        "sound_play_gaze_duration": 0.5  # Duration to trigger sound (seconds)
     }
 }
 
@@ -25,6 +24,88 @@ from main import (
     MovingMode_locking, MovingMode_bouncing, MovingMode_organic, 
     Target_image, Sound_effect, TobiiController, MouseController
 )
+
+class MovingMode_organic_exp2(MovingMode_organic):
+    """
+    Modified organic movement mode for Experiment 2.
+    This class overrides the update method to use the center of the respective screen half
+    (left or right) as the attraction point rather than the center of the entire screen.
+    """
+    def __init__(self, win, is_left_side=True, **kwargs):
+        super().__init__(win, **kwargs)
+        self.is_left_side = is_left_side
+        # Calculate the x-coordinate of the center of the respective half
+        screen_aspect = win.aspect
+        if self.is_left_side:
+            self.center_x = -0.25 * screen_aspect  # Center of left half
+        else:
+            self.center_x = 0.25 * screen_aspect   # Center of right half
+        self.center_y = 0.0  # Vertical center remains the same
+
+    def update(self):
+        """
+        Updates the dot's position and angle based on its movement dynamics.
+        Modified to use the center of the respective screen half as the attraction point.
+        """
+        # Calculate the vector from the dot to the center of the respective half
+        dx = self.x - self.center_x
+        dy = self.y - self.center_y
+        dist_from_center = np.sqrt(dx**2 + dy**2)  # Distance from the half-center
+
+        # Calculate normalized distance (0 at center, 1 at nearest edge)
+        max_dist_ref = min(self.horizontal_limit, self.vertical_limit)
+        normalized_dist = min(1.0, dist_from_center / max_dist_ref)
+
+        # Calculate attraction strength proportional to the square of the normalized distance
+        current_attraction = self.max_attraction_strength * normalized_dist**2
+
+        # Calculate the angle pointing towards the center of the half
+        target_angle = np.arctan2(-dy, -dx)
+
+        # Calculate the shortest angle difference to the target angle
+        angle_diff = target_angle - self.angle
+        while angle_diff > np.pi:
+            angle_diff -= 2 * np.pi
+        while angle_diff < -np.pi:
+            angle_diff += 2 * np.pi
+
+        # Add random noise to the angle for wandering behavior
+        self.angle += np.random.uniform(-0.5, 0.5) * self.noise_intensity
+
+        # Adjust the angle towards the center using the calculated attraction strength
+        self.angle += angle_diff * current_attraction
+
+        # Normalize the angle to keep it within 0 to 2*pi
+        self.angle = self.angle % (2 * np.pi)
+
+        # Update the position based on the angle and speed
+        delta_x = self.speed * np.cos(self.angle)
+        delta_y = self.speed * np.sin(self.angle)
+        self.x += delta_x
+        self.y += delta_y
+
+        # Handle boundary collisions
+        # Reflect the dot's movement if it hits the horizontal boundaries
+        if self.x + self.radius > self.horizontal_limit:
+            self.x = self.horizontal_limit - self.radius
+            self.angle = np.pi - self.angle
+        elif self.x - self.radius < -self.horizontal_limit:
+            self.x = -self.horizontal_limit + self.radius
+            self.angle = np.pi - self.angle
+
+        # Reflect the dot's movement if it hits the vertical boundaries
+        if self.y + self.radius > self.vertical_limit:
+            self.y = self.vertical_limit - self.radius
+            self.angle = -self.angle
+        elif self.y - self.radius < -self.vertical_limit:
+            self.y = -self.vertical_limit + self.radius
+            self.angle = -self.angle
+
+        # Normalize the angle again after reflection
+        self.angle = self.angle % (2 * np.pi)
+
+        # Update the pos property for consistency with MovingMode interface
+        self.pos = np.array([self.x, self.y])
 
 class Design_Exp2:
     """
@@ -240,9 +321,8 @@ def run_experiment_2(controller_type='tobii'):
     
     # Get subject ID and path to Experiment 1 configuration
     exp1_config_path = data_manager.enter_subj_id_and_exp1_config()
-    
-    # Load Experiment 1 configuration
-    design = Design_Exp2(config_exp2["design_exp2"]["N_trials_exp2"])
+      # Load Experiment 1 configuration
+    design = Design_Exp2(config_exp2["design_exp2"]["number_of_trial_exp2"])
     config_exp1 = design.load_exp1_config(exp1_config_path)
     
     # Merge configurations (Exp1 + Exp2 specific parameters)
@@ -298,14 +378,13 @@ def run_experiment_2(controller_type='tobii'):
     # Initialize left and right targets
     left_target = Target_image(win, scale=config_exp1["stimulus"]["scale"])
     right_target = Target_image(win, scale=config_exp1["stimulus"]["scale"])
-    
-    # Initialize moving modes - we'll create instances as needed during trials
+      # Initialize moving modes - we'll create instances as needed during trials
     locking_mode_left = MovingMode_locking(win)
     locking_mode_right = MovingMode_locking(win)
     bouncing_mode_left = MovingMode_bouncing(win, speed=config_exp1["stimulus"]["speed"])
     bouncing_mode_right = MovingMode_bouncing(win, speed=config_exp1["stimulus"]["speed"])
-    organic_mode_left = MovingMode_organic(win, speed=config_exp1["stimulus"]["speed"])
-    organic_mode_right = MovingMode_organic(win, speed=config_exp1["stimulus"]["speed"])
+    organic_mode_left = MovingMode_organic_exp2(win, is_left_side=True, speed=config_exp1["stimulus"]["speed"])
+    organic_mode_right = MovingMode_organic_exp2(win, is_left_side=False, speed=config_exp1["stimulus"]["speed"])
     
     # Define movement constraints (screen halves)
     screen_aspect = win.aspect
@@ -339,6 +418,9 @@ def run_experiment_2(controller_type='tobii'):
     instructions.draw()
     win.flip()
     event.waitKeys(keyList=['space'])
+    
+    win.flip()
+    core.wait(2)
     
     # Run trials
     for iTrial, trial in enumerate(trials):
