@@ -8,8 +8,6 @@ import json
 import GazeStabilizer
 import threading
 import time
-from collections import deque
-
 
 config = {
     "design": {
@@ -19,7 +17,7 @@ config = {
     "experiment": {
         "fullscreen": True,
         "show_pos_indicator": False,  # Show position indicator on the screen
-        "screen_margin": 0.05,  # Margin from the screen edge in height units
+        "screen_margin": 0.02,  # Margin from the screen edge in height units
     },
     "controller": {
         "type": "tobii",  # Options: 'mouse' or 'tobii'
@@ -29,47 +27,68 @@ config = {
         "calibration_points": 5,  # Number of calibration points (5 or 9)
         "stabilizer_type": "moving_average",  # Stabilizer type. none, 'moving_average'
         "stabilizer_moving_average": {
-            "buffer_size": 100,  # Size of the moving average buffer
-            "sampling_rate": 1000,  # Sampling rate in Hz
+            "buffer_size": 50,  # Size of the moving average buffer
+            "sampling_rate": 500,  # Sampling rate in Hz
         },
 
     },
     "stimulus": {
+        "target_type": "image",  # Options: 'circle' or 'image'
         "speed": 0.005,  # Speed of the target in bouncing mode
         "scale": 0.05,  # Scale of the target image
+        "flash": True,  # Whether to flash the target at the beginning of a trial
+        "sound": {
+            "play": True,  # Whether to play sound
+        },
+        "images": [
+            "src/images/inosisi.png",
+            "src/images/kani.png",
+            "src/images/kirin.png",
+            "src/images/mouse.png",
+            "src/images/panda.png",
+            "src/images/tatsu.png",
+        ],
+        "sounds": [
+            "src/sounds/nada-9-326002.wav",
+            "src/sounds/notify-1-310752.wav",
+            "src/sounds/notify-169186.wav",
+            "src/sounds/zapsplat_bell_small_handbell_service_bell_ring_medium_sequence_112480.wav",
+        ],
     },
-
+    "runtime":{}
 }
+
+# initialise sound devices
+if config["stimulus"]["sound"]["play"]:
+    from psychopy import prefs
+    # prefs.hardware['audioLib'] = ['sounddevice']
+    # prefs.hardware['audioLatencyMode'] = '1' 
+    prefs.hardware['audioLib'] = ['pygame']  
+    prefs.hardware['audioSampleRate'] = 44100
+    from psychopy import sound
 
 
 # create data directory if not exist
-data_folder = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), '../data'))
-if not os.path.exists(data_folder):
-    os.makedirs(data_folder)
-    print(f"Data directory created: {data_folder}")
-else:
-    print(f"Data directory already exists: {data_folder}")
+def create_data_directory():
+    """
+    Ensures that the data directory exists. If it doesn't, creates it.
+    """
+    data_folder = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), '../data'))
+    if not os.path.exists(data_folder):
+        os.makedirs(data_folder)
+        print(f"Data directory created: {data_folder}")
+    else:
+        print(f"Data directory already exists: {data_folder}")
+    return data_folder
 
 
 # Get all image file paths in the /image directory
 def get_images():
-    """
-    Retrieves all image file paths from the './images' directory.
+    return config["stimulus"]["images"]
 
-    Returns:
-        list: A list of file paths to the images.
-    """
-    image_dir = os.path.abspath(os.path.join(
-        os.path.dirname(__file__), './images'))
-    if os.path.exists(image_dir):
-        images = [os.path.join(image_dir, f) for f in os.listdir(
-            image_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif'))]
-        print(f"Found {len(images)} images in the directory.")
-    else:
-        print(f"Image directory not found: {image_dir}")
-        images = []
-    return images
+def get_sounds():
+    return config["stimulus"]["sounds"]
 
 
 def get_colors(n=10):
@@ -112,6 +131,43 @@ def get_colors(n=10):
 
         return color_list + additional_colors
 
+def flash_target(target, win, flashes=5, on_duration=0.2, off_duration=0.1):
+    """
+    Flash the target to capture attention.
+    
+    Parameters:
+        target: The target object to flash
+        win: The window to display on
+        flashes: Number of times to flash (default: 3)
+        on_duration: Duration in seconds to show the target (default: 0.2)
+        off_duration: Duration in seconds to hide the target (default: 0.1)
+    """
+    for i in range(flashes):
+        # Show target
+        target.draw()
+        win.flip()
+        core.wait(on_duration)
+        
+        # Hide target (just flip the window without drawing the target)
+        win.flip()
+        core.wait(off_duration)
+        
+def bring_back_to_screen(pos, horizontal_limit, vertical_limit):
+    """
+    Bring the target back to the screen if it goes out of bounds.
+    """
+    # Check if the target is out of bounds and bring it back
+    if pos[0] < -horizontal_limit:
+        pos[0] = -horizontal_limit
+    elif pos[0] > horizontal_limit:
+        pos[0] = horizontal_limit
+
+    if pos[1] < -vertical_limit:
+        pos[1] = -vertical_limit
+    elif pos[1] > vertical_limit:
+        pos[1] = vertical_limit
+
+    return pos
 
 def run_tobii_calibration(tobii_controller, num_points=5):
     """
@@ -219,16 +275,33 @@ class Design:
                 moving_mode_seq.append('locking')
         self.moving_mode_seq = moving_mode_seq
         return self.moving_mode_seq
+    
+    def assign_moving_mode_to_image(self):
+        """randomly assign unique image file to moving mode"""
+        if self.moving_mode_seq is None:
+            raise ValueError(
+                "Moving mode sequence must be generated first. Call gen_design_interleaved() before this method.")
 
-    def assign_stim_to_moving_mode(self):
-        """
-        Randomly assigns stimulus index to each moving mode in the sequence.
-        For example, if there are 3 unique moving modes ('bouncing', 'organic', 'locking'),
-        randomly assign stimulus 0, 1, and 2 to these modes.
+        # Get unique moving modes
+        unique_modes = list(set(self.moving_mode_seq))
+        nMode = len(unique_modes)
+        
+        # Randomly assign image indexes to unique moving modes
+        image_indexes = np.random.choice(
+            range(len(config["stimulus"]["images"])), size=nMode, replace=False)
+        
+        # Create mapping from moving mode to image file
+        self.moving_mode_to_image = {
+            mode: config["stimulus"]["images"][image_indexes[i]] for i, mode in enumerate(unique_modes)}
+        
+        # save this mapping to config runtime  
+        config["runtime"]["moving_mode_to_image"] = self.moving_mode_to_image
+        return self.moving_mode_to_image
+        
 
-        Returns:
-            list: A list of indexes corresponding to the moving_mode_seq.
-        """
+
+    def assign_moving_mode_to_sound(self):
+        """randomly assign unique sound file to moving mode"""
         if self.moving_mode_seq is None:
             raise ValueError(
                 "Moving mode sequence must be generated first. Call gen_design_interleaved() before this method.")
@@ -237,20 +310,17 @@ class Design:
         unique_modes = list(set(self.moving_mode_seq))
         nMode = len(unique_modes)
 
-        # Randomly assign stimulus indexes to unique moving modes
-        stimulus_indexes = np.random.choice(
-            range(nMode), size=nMode, replace=False)
+        # Randomly assign sound indexes to unique moving modes
+        sound_indexes = np.random.choice(
+            range(len(config["stimulus"]["sounds"])), size=nMode, replace=False)
 
-        # Create mapping from moving mode to stimulus index
-        self.moving_mode_to_stimulus = {
-            mode: stimulus_indexes[i] for i, mode in enumerate(unique_modes)}
+        # Create mapping from moving mode to sound file
+        self.moving_mode_to_sound = {
+            mode: config["stimulus"]["sounds"][sound_indexes[i]] for i, mode in enumerate(unique_modes)}
 
-        # Create the full stimulus sequence by mapping each moving mode to its assigned stimulus
-        stimulus_seq = [self.moving_mode_to_stimulus[mode]
-                        for mode in self.moving_mode_seq]
-        self.stimulus_sequence = stimulus_seq
-
-        return stimulus_seq
+        # save this mapping to config runtime
+        config["runtime"]["moving_mode_to_sound"] = self.moving_mode_to_sound
+        return self.moving_mode_to_sound
 
 
 class MovingMode(ABC):
@@ -291,8 +361,11 @@ class MovingMode_locking(MovingMode):
         self.win = win
         self.lock_distance = lock_distance
         self.locked = False
+        # Add boundary limits like in other moving modes
+        self.horizontal_limit = 0.5 * win.aspect - config["experiment"]["screen_margin"]
+        self.vertical_limit = 0.5 - config["experiment"]["screen_margin"]
 
-    def update(self, position=None):
+    def update(self, position=None, margin_control=False):
         """
         Updates the target position based on an external position.
 
@@ -313,7 +386,19 @@ class MovingMode_locking(MovingMode):
 
         # If locked, update the target position to follow the external position
         if self.locked:
-            self.pos = position
+            # Get position but constrain it within screen boundaries
+            x = position[0]
+            y = position[1]
+            
+            if margin_control:
+                # Constrain x within horizontal limits
+                x = max(-self.horizontal_limit, min(x, self.horizontal_limit))
+                
+                # Constrain y within vertical limits
+                y = max(-self.vertical_limit, min(y, self.vertical_limit))
+            
+            # Update position with constrained values
+            self.pos = np.array([x, y], dtype=np.float64)
 
     def reset(self, pos=None):
         """
@@ -485,7 +570,11 @@ class MovingMode_organic(MovingMode):
 class Target(ABC):
     def __init__(self):
         pass
-
+    
+    @abstractmethod
+    def set_stim(self, stim):
+        pass
+        
     @abstractmethod
     def set_pos(self, pos):
         pass
@@ -503,6 +592,17 @@ class Target_circle(Target):
         self.color = color
         self.circle = visual.Circle(
             win, radius=self.radius, fillColor=self.color, lineColor=self.color)
+        
+    def set_stim(self, stim_idx):
+        """
+        Set the stimulus for the target. In this case, it's a circle, so we can set its color.
+        """
+        if stim_idx < len(get_colors()):
+            self.color = get_colors()[stim_idx]
+            self.circle.setFillColor(self.color)
+            self.circle.setLineColor(self.color)
+        else:
+            raise IndexError("Stimulus index out of range.")
 
     def set_pos(self, pos):
         self.circle.setPos(pos)
@@ -522,15 +622,15 @@ class Target_image(Target):
         self.scale = scale
         self.image = visual.ImageStim(
             win, image=self.images[0] if self.images else None, size=scale)
+        
+    def set_stim(self, image_path):
+        """
+        Set the image for the target. 
+        image_path: str, path to the image file
+        """
+        self.image.setImage(image_path)
+        self.image.setSize(self.scale)
 
-    def set_image(self, image_idx):
-        """
-        Set the image for the target from the images list based on the index.
-        """
-        if 0 <= image_idx < len(self.images):
-            self.image.setImage(self.images[image_idx])
-        else:
-            raise IndexError("Image index out of range.")
 
     def set_pos(self, pos):
         """
@@ -541,6 +641,50 @@ class Target_image(Target):
     def draw(self):
         self.image.draw()
 
+
+class Sound_effect:
+    """
+    A class to handle sound effects.
+    """
+    def __init__(self, moving_mode_to_sound):
+
+        
+        self.moving_mode_to_sound = moving_mode_to_sound
+        self.sounds = {}
+        self.preload_sound()
+        self.isPlayed = False
+    
+    def preload_sound(self):
+        """
+        Preload sound files for each moving mode.
+        """
+        self.sounds = {}
+        for mode, sound_path in self.moving_mode_to_sound.items():
+            if os.path.exists(sound_path):
+                self.sounds[mode] = sound.Sound(sound_path)
+            else:
+                print(f"Sound file not found: {sound_path}")
+                
+    def play(self, mode):
+        """
+        Play the sound associated with the given moving mode.
+        """
+        if mode in self.sounds:
+            if not self.isPlayed:
+                self.sounds[mode].play()
+                self.isPlayed = True
+        else:
+            print(f"No sound available for mode: {mode}")
+            
+    def reset(self):
+        """
+        Reset the sound effect state.
+        """
+        self.isPlayed = False
+        # stop all sounds
+        for sound in self.sounds.values():
+            sound.stop()
+    
 
 class ControllerBase(ABC):
     @abstractmethod
@@ -723,16 +867,29 @@ class DataManager:
             self.file.close()
             print(f"Data file closed: {self.data_path_exp}")
             self.file = None
+            
+            
 
-
-def run_exp(controller_type='tobii', target_type='image'):
+def run_exp(controller_type='tobii'):
+    # define target type
+    target_type = config["stimulus"]["target_type"]    
+    
+    # create date directory if not exist
+    data_folder = create_data_directory()
+    
     # generate design parameters
     design = Design(number_of_trial=config["design"]["number_of_trial"])
     moving_mode_seq = design.gen_design_interleaved()
-    stimulus_seq = design.assign_stim_to_moving_mode()
+    design.assign_moving_mode_to_image()
 
-    # ------------------------------ Initialisation ------------------------------ #
-    current_pos = np.array([0, 0])  # Initial position of the target
+    # Create Sound_effect class
+    if config["stimulus"]["sound"]["play"]:
+        moving_mode_to_sound = design.assign_moving_mode_to_sound()
+        sound_effect = Sound_effect(moving_mode_to_sound)
+
+
+     # Initial position of the target
+    current_pos = np.array([0, 0]) 
 
     # Initialize data manager and input subject ID
     data_manager = DataManager(data_folder)
@@ -757,6 +914,7 @@ def run_exp(controller_type='tobii', target_type='image'):
         target = Target_image(win, scale=config["stimulus"]["scale"])
     else:
         raise ValueError("Invalid target type. Use 'circle' or 'image'.")
+
 
     # initialise controller
     if controller_type == 'tobii':
@@ -832,13 +990,19 @@ def run_exp(controller_type='tobii', target_type='image'):
     win.flip()
     event.waitKeys(keyList=['space'])
 
-    for iTrial, (mode, stim_idx) in enumerate(zip(moving_mode_seq, stimulus_seq)):
+    for iTrial, mode in enumerate(moving_mode_seq):
         # Record trial start event
         controller.record_event(f"No.{iTrial} trial started")
 
         # Set the appropriate image for the target if using images
         if target_type == 'image':
-            target.set_image(stim_idx)
+            # Use the image mapping instead of index-based selection
+            image_file = design.moving_mode_to_image[mode]
+            target.set_stim(image_file)
+
+        # reset sound_effect
+        if config["stimulus"]["sound"]["play"]:
+            sound_effect.reset()
 
         # Reset the appropriate moving mode
         current_mode = None
@@ -849,7 +1013,21 @@ def run_exp(controller_type='tobii', target_type='image'):
         elif mode == 'organic':
             current_mode = organic_mode
 
+        # Reset the position within screen limits
+        horizontal_limit = 0.5 * win.aspect - config["experiment"]["screen_margin"]
+        vertical_limit = 0.5 - config["experiment"]["screen_margin"]
+        current_pos = bring_back_to_screen(
+            current_pos, horizontal_limit, vertical_limit)
         current_mode.reset(current_pos)
+        target.set_pos(current_pos)
+
+        # Play sound if enabled
+        if config["stimulus"]["sound"]["play"]:
+            sound_effect.play(mode)
+        
+        # flash the target if enable
+        if config["stimulus"]["flash"]:
+            flash_target(target, win)
 
         # reset timer
         start_time = core.getTime()
@@ -881,12 +1059,12 @@ def run_exp(controller_type='tobii', target_type='image'):
 
             # Draw the target, trial counter, and mode display
             target.draw()
-
+    
             # Draw position indicator if enabled
             if config["experiment"]["show_pos_indicator"]:
                 pos_indicator.setPos(controller_pos)
                 pos_indicator.draw()
-
+                
             # Check for escape key
             keys = event.getKeys()
             if 'escape' in keys:
@@ -895,7 +1073,7 @@ def run_exp(controller_type='tobii', target_type='image'):
                 core.quit()
                 return
 
-            # log data
+            # log data - update to use mode directly instead of stim_idx
             frame_data = {
                 'eye_x': controller_pos[0],
                 'eye_y': controller_pos[1],
@@ -907,7 +1085,8 @@ def run_exp(controller_type='tobii', target_type='image'):
                 'time': core.getTime(),
                 'time_trial': core.getTime() - start_time,
                 'moving_mode': mode,
-                'stimulus_index': stim_idx,
+                'image_file': design.moving_mode_to_image[mode] if target_type == 'image' else 'None',
+                'sound_file': design.moving_mode_to_sound[mode] if config["stimulus"]["sound"]["play"] else 'None',
             }
             data_manager.log_data(frame_data)
 
@@ -941,5 +1120,4 @@ def run_exp(controller_type='tobii', target_type='image'):
 
 
 if __name__ == "__main__":
-    run_exp(
-        controller_type=config["controller"]['type'], target_type='image')
+    run_exp(controller_type=config["controller"]['type'])
