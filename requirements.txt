@@ -1,0 +1,39 @@
+# Eye Tracking Experiment Suite - Requirements
+# Core dependencies for the SOA Eye Tracking Experiment
+
+# PsychoPy - Main psychology experiment framework
+psychopy>=2023.1.0
+
+# Eye tracking dependencies
+tobii-research>=1.11.0
+
+# Scientific computing
+numpy>=1.21.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+
+# Data handling
+pandas>=1.3.0
+
+# Audio/Video processing
+pygame>=2.1.0
+pydub>=0.25.0
+
+# Visualization (for make_movie.py and analysis)
+matplotlib>=3.5.0
+
+# System utilities
+Pillow>=8.0.0
+
+# Optional: For better audio performance
+# sounddevice>=0.4.0
+
+# Development and testing dependencies (optional)
+# pytest>=6.0.0
+# jupyter>=1.0.0
+
+# Notes:
+# 1. psychopy_tobii_controller is included as a local package in src/
+# 2. GazeStabilizer.py is a local module in src/
+# 3. Some dependencies like threading, time, os, json, datetime, abc are part of Python standard library
+# 4. For Windows users, you may need additional system dependencies for Tobii eye tracker drivers

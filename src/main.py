@@ -18,6 +18,12 @@ config = {
         "fullscreen": True,
         "show_pos_indicator": False,  # Show position indicator on the screen
         "screen_margin": 0.02,  # Margin from the screen edge in height units
+        "break": {
+            "enabled": True,  # Enable or disable breaks
+            "every_n_trials": 4,  # Number of trials after which a break is taken
+            "duration": 5,  # Break duration in seconds
+            "movie": ["src/movies/countdown_6_seconds_300x300.mp4"]  # Movie to play during the break
+        },
     },
     "controller": {
         "type": "tobii",  # Options: 'mouse' or 'tobii'
@@ -251,6 +257,66 @@ def process_gaze_position(current_gaze_position, last_gaze_position):
 
     current_gaze_position = np.array((eye_x_loc, eye_y_loc))
     return current_gaze_position, no_eye_data
+
+def break_time(win, movie_path, duration):
+    """
+    Break time function that plays a movie during the break.
+    
+    Parameters:
+        win: PsychoPy window object
+        movie_path: Path to the movie file to play
+        duration: Duration to play the movie in seconds
+
+    """
+    print('Starting break time...')
+    # show a "take a break" text for 2 second
+    break_text = visual.TextStim(
+        win,
+        text="Break Time!\nTake a rest...",
+        pos=(0, 0),
+        color='white',
+        height=0.05
+    )
+    break_text.draw()
+    win.flip()
+    core.wait(2)
+
+    # Create movie stimulus
+    movie = visual.MovieStim3(
+        win, 
+        movie_path,
+        size=(0.5, 0.5),  # Scaled size since it's 300x300
+        pos=(0, 0),  # Center position
+        flipVert=False,
+        flipHoriz=False,
+        loop=False  # Don't loop the countdown
+    )
+    
+    start_time = core.getTime()
+    
+    # Play the movie for the specified duration
+    movie.play()
+    # movie.draw()
+    # win.flip()    
+    # while (core.getTime() - start_time) < duration:
+    #     movie.draw()
+    #     win.flip()
+    #     # Check for escape key during break
+    #     keys = event.getKeys()
+    #     if 'escape' in keys:
+    #         movie.stop()
+    #         return 
+    
+    # Stop the movie
+    # movie.stop()
+
+    # show "Press 'space' to continue"
+    break_text.setText("Press 'space' to continue")
+    break_text.draw()
+    win.flip()
+    event.waitKeys(keyList=['space'])
+    print('Break time ended, continuing the experiment...')
+    return 
 
 
 class Design:
@@ -772,6 +838,7 @@ class TobiiController(ControllerBase):
 class MouseController(ControllerBase):
     def __init__(self, win=None):
         self.mouse = event.Mouse(win=win)
+        self.isNoData = False
 
     def get_pos(self):
         return self.mouse.getPos()
@@ -1072,6 +1139,14 @@ def run_exp(controller_type='tobii'):
             keys = event.getKeys()
             if 'escape' in keys:
                 controller.record_event("Experiment interrupted by user")
+                
+                # Clean up Tobii resources if using eye tracker
+                if controller_type == 'tobii':
+                    controller.unsubscribe()
+                
+                # Close the data file
+                data_manager.close_file()
+
                 win.close()
                 core.quit()
                 return
@@ -1098,6 +1173,19 @@ def run_exp(controller_type='tobii'):
 
         # Record trial end event
         controller.record_event(f"No.{iTrial} trial ended")
+
+        # Break time handling
+        # if this is the final trial, skip the break
+        if iTrial != len(moving_mode_seq) - 1:
+            if config["experiment"]["break"]["enabled"] and (iTrial + 1) % config["experiment"]["break"]["every_n_trials"] == 0:
+                # Calculate break duration (in seconds)
+                break_duration = config["experiment"]["break"]["duration"]
+
+                # Get the movie path for the break
+                movie_path = config["experiment"]["break"]["movie"][0]
+
+                # Run the break time function
+                break_time(win, movie_path, break_duration)
 
     # Record experiment completion event
     controller.record_event("Experiment completed")

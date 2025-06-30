@@ -22,7 +22,7 @@ config_exp2 = {
 from main import (
     create_data_directory, process_gaze_position, bring_back_to_screen, 
     MovingMode_locking, MovingMode_bouncing, MovingMode_organic, 
-    Target_image, Sound_effect, TobiiController, MouseController
+    Target_image, Sound_effect, TobiiController, MouseController, break_time
 )
 
 class MovingMode_organic_exp2(MovingMode_organic):
@@ -645,6 +645,19 @@ def run_experiment_2(controller_type='tobii'):
         
         # Record trial end event
         controller.record_event(f"Exp2 Trial {iTrial+1} ended")
+        
+        # Break time handling
+        # if this is the final trial, skip the break
+        if iTrial != len(trials) - 1:
+            if config_exp1["experiment"]["break"]["enabled"] and (iTrial + 1) % config_exp1["experiment"]["break"]["every_n_trials"] == 0:
+                # Calculate break duration (in seconds)
+                break_duration = config_exp1["experiment"]["break"]["duration"]
+
+                # Get the movie path for the break
+                movie_path = config_exp1["experiment"]["break"]["movie"][0]
+
+                # Run the break time function
+                break_time(win, movie_path, break_duration)        
         
         # Brief pause between trials
         if iTrial < len(trials) - 1:  # Not after the last trial
