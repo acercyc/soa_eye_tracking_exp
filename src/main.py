@@ -9,9 +9,14 @@ import GazeStabilizer
 import threading
 import time
 
+# Todo: 
+#  timing issue
+#  add mechanism that prevent continious fixation
+ 
+
 config = {
     "design": {
-        "trial_duration": 10,  # in seconds
+        "trial_duration": 2,  # in seconds
         "number_of_trial": 20
     },
     "experiment": {
@@ -19,14 +24,14 @@ config = {
         "show_pos_indicator": False,  # Show position indicator on the screen
         "screen_margin": 0.02,  # Margin from the screen edge in height units
         "break": {
-            "enabled": True,  # Enable or disable breaks
+            "enabled": False,  # Enable or disable breaks
             "every_n_trials": 4,  # Number of trials after which a break is taken
             "duration": 5,  # Break duration in seconds
             "movie": ["src/movies/countdown_6_seconds_300x300.mp4"]  # Movie to play during the break
         },
     },
     "controller": {
-        "type": "tobii",  # Options: 'mouse' or 'tobii'
+        "type": "mouse",  # Options: 'mouse' or 'tobii'
     },
     "tobii": {
         "calibration": False,  # Whether to perform calibration
@@ -69,8 +74,8 @@ if config["stimulus"]["sound"]["play"]:
     from psychopy import prefs
     # prefs.hardware['audioLib'] = ['sounddevice']
     # prefs.hardware['audioLatencyMode'] = '1' 
-    prefs.hardware['audioLib'] = ['pygame']  
-    prefs.hardware['audioSampleRate'] = 44100
+    prefs.hardware['audioLib'] = ['pygame']   # type: ignore
+    prefs.hardware['audioSampleRate'] = 44100 # type: ignore
     from psychopy import sound
 
 
@@ -282,7 +287,7 @@ def break_time(win, movie_path, duration):
     core.wait(2)
 
     # Create movie stimulus
-    movie = visual.MovieStim3(
+    movie = visual.MovieStim3( # type: ignore
         win, 
         movie_path,
         size=(0.5, 0.5),  # Scaled size since it's 300x300
@@ -568,8 +573,8 @@ class MovingMode_organic(MovingMode):
         dist_from_center = np.sqrt(dx**2 + dy**2)  # Distance from the center
 
         # Calculate normalized distance (0 at center, 1 at nearest edge)
-        max_dist_ref = min(self.horizontal_limit, self.vertical_limit)
-        normalized_dist = min(1.0, dist_from_center / max_dist_ref)
+        max_dist_ref = min(float(self.horizontal_limit), float(self.vertical_limit))
+        normalized_dist = min(1.0, float(dist_from_center / max_dist_ref))
 
         # Calculate attraction strength proportional to the square of the normalized distance
         current_attraction = self.max_attraction_strength * normalized_dist**2
@@ -761,6 +766,9 @@ class ControllerBase(ABC):
     def record_event(self, event):
         pass
 
+    def get_pos_from_stabilizer(self):
+        pass
+
 
 class TobiiController(ControllerBase):
     def __init__(self, win, stabilizer_type=None):
@@ -823,11 +831,15 @@ class TobiiController(ControllerBase):
         pos, no_eye_data = process_gaze_position(pos, self.last_pos)
         self.isNoData = no_eye_data
         self.last_pos = pos
+        return pos
 
+    def get_pos_from_stabilizer(self):
+        pos = self.last_pos
         # Apply the stabilizer if available
         if self.stabilizer:
             pos = self.stabilizer.stabilize(pos[0], pos[1])
-            pos = np.array(pos, dtype=np.float64)
+            
+        pos = np.array(pos, dtype=np.float64)
         return pos
 
     def record_event(self, event):
@@ -839,6 +851,8 @@ class MouseController(ControllerBase):
     def __init__(self, win=None):
         self.mouse = event.Mouse(win=win)
         self.isNoData = False
+        self.stabilizer_type = None
+        self.stabilizer = None
 
     def get_pos(self):
         return self.mouse.getPos()
@@ -877,6 +891,10 @@ class DataManager:
         """
         Save the configuration to a JSON file.
         """
+        if self.data_path_config is None:
+            print("Error: Configuration file path not set. Call enter_subj_id() first.")
+            return
+        
         try:
             with open(self.data_path_config, 'w') as f:
                 json.dump(config, f, indent=4)
@@ -891,6 +909,11 @@ class DataManager:
 
         This method streams data directly to a file without keeping everything in memory.
         """
+        # Check if data path is set
+        if self.data_path_exp is None:
+            print("Error: Data file path not set. Call enter_subj_id() first.")
+            return
+            
         # Open the file if not already open
         if self.file is None:
             try:
@@ -1044,8 +1067,8 @@ def run_exp(controller_type='tobii'):
             return
 
     # --------------------------- Start the experiment --------------------------- #
+    # Start recording gaze data (only for Tobii)
     if controller_type == 'tobii':
-        # Start recording gaze data
         controller.subscribe(data_manager.data_path_tobii)
 
     # Record experiment start event
@@ -1082,6 +1105,8 @@ def run_exp(controller_type='tobii'):
             current_mode = bouncing_mode
         elif mode == 'organic':
             current_mode = organic_mode
+        else:
+            raise ValueError(f"Unknown moving mode: {mode}")
 
         # Reset the position within screen limits
         horizontal_limit = 0.5 * win.aspect - config["experiment"]["screen_margin"]
@@ -1105,6 +1130,7 @@ def run_exp(controller_type='tobii'):
         effective_time = 0
         current_time = 0
         last_time = start_time
+        
         while effective_time < config["design"]["trial_duration"]:
             # get time
             current_time = core.getTime()
@@ -1112,15 +1138,20 @@ def run_exp(controller_type='tobii'):
             last_time = current_time
             
             # Get controller position
-            controller_pos = controller.get_pos()
-            
+            controller_raw_pos = controller.get_pos()
+            controller_pos = controller_raw_pos
+
+            # get stabilized position
+            if controller.stabilizer is not None:
+                controller_pos = controller.get_pos_from_stabilizer()
+
             # if no eye data is recorded, time is ignored
             if not controller.isNoData:
                 effective_time += dt
 
             # Update target position based on the current mode
             if mode == 'locking':
-                current_mode.update(controller_pos)
+                current_mode.update(position=controller_pos)
             else:
                 current_mode.update()
 
@@ -1131,7 +1162,7 @@ def run_exp(controller_type='tobii'):
             target.draw()
     
             # Draw position indicator if enabled
-            if config["experiment"]["show_pos_indicator"]:
+            if pos_indicator is not None:
                 pos_indicator.setPos(controller_pos)
                 pos_indicator.draw()
                 
@@ -1153,6 +1184,8 @@ def run_exp(controller_type='tobii'):
 
             # log data - update to use mode directly instead of stim_idx
             frame_data = {
+                'eye_raw_x': controller_raw_pos[0],
+                'eye_raw_y': controller_raw_pos[1],
                 'eye_x': controller_pos[0],
                 'eye_y': controller_pos[1],
                 'stim_x': current_pos[0],
