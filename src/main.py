@@ -16,12 +16,12 @@ import time
 
 config = {
     "design": {
-        "trial_duration": 2,  # in seconds
+        "trial_duration": 10,  # in seconds
         "number_of_trial": 20
     },
     "experiment": {
         "fullscreen": True,
-        "show_pos_indicator": False,  # Show position indicator on the screen
+        "show_pos_indicator": True,  # Show position indicator on the screen
         "screen_margin": 0.02,  # Margin from the screen edge in height units
         "break": {
             "enabled": False,  # Enable or disable breaks
@@ -48,6 +48,12 @@ config = {
         "speed": 0.005,  # Speed of the target in bouncing mode
         "scale": 0.05,  # Scale of the target image
         "flash": True,  # Whether to flash the target at the beginning of a trial
+        "locking_mode": {
+            # Distance (in height units) from an edge to consider the stimulus "on the edge"
+            "edge_min_distance": 0.02,
+            # How long (seconds) staying on the edge triggers auto-unlock and recenter
+            "edge_dwell_to_recenter_sec": 2,
+        },
         "sound": {
             "play": True,  # Whether to play sound
         },
@@ -427,7 +433,7 @@ class MovingMode_locking(MovingMode):
     The target follows an external position (e.g., mouse, gaze) when close enough and locks to it.
     """
 
-    def __init__(self, win, lock_distance=0.1):
+    def __init__(self, win, lock_distance=0.1, edge_min_distance=None, edge_dwell_to_recenter_sec=None, recenter_position=(0.0, 0.0)):
         super().__init__()
         self.win = win
         self.lock_distance = lock_distance
@@ -435,6 +441,14 @@ class MovingMode_locking(MovingMode):
         # Add boundary limits like in other moving modes
         self.horizontal_limit = 0.5 * win.aspect - config["experiment"]["screen_margin"]
         self.vertical_limit = 0.5 - config["experiment"]["screen_margin"]
+        # Edge dwell parameters (with config fallbacks)
+        locking_cfg = config.get("stimulus", {}).get("locking", {})
+        self.edge_min_distance = config["stimulus"]["locking_mode"]["edge_min_distance"]
+        self.edge_dwell_threshold = config["stimulus"]["locking_mode"]["edge_dwell_to_recenter_sec"]
+        self.recenter_position = np.array(recenter_position, dtype=np.float64)
+        # Internal timers/state for dwell detection
+        self._edge_dwell_time = 0.0
+        self._last_update_time = core.getTime()
 
     def update(self, position=None, margin_control=False):
         """
@@ -444,6 +458,13 @@ class MovingMode_locking(MovingMode):
             external_position (tuple): The external position to potentially lock onto (x, y).
                                       If None, the target remains at its current position.
         """
+        # Time delta for dwell timing
+        now_time = core.getTime()
+        dt = 0.0
+        if hasattr(self, "_last_update_time") and self._last_update_time is not None:
+            dt = now_time - self._last_update_time
+        self._last_update_time = now_time
+
         # If no external position is provided, keep the current position
         if position is None:
             return
@@ -471,6 +492,22 @@ class MovingMode_locking(MovingMode):
             # Update position with constrained values
             self.pos = np.array([x, y], dtype=np.float64)
 
+            # Edge dwell detection: if stimulus stays near an edge long enough, unlock and recenter
+            dist_h = float(self.horizontal_limit) - abs(float(self.pos[0]))
+            dist_v = float(self.vertical_limit) - abs(float(self.pos[1]))
+            near_edge = (dist_h <= float(self.edge_min_distance)) or (dist_v <= float(self.edge_min_distance))
+
+            if near_edge:
+                self._edge_dwell_time += dt
+            else:
+                self._edge_dwell_time = 0.0
+
+            if self._edge_dwell_time >= float(self.edge_dwell_threshold):
+                # Auto-unlock and recenter
+                self.pos = np.array(self.recenter_position, dtype=np.float64)
+                self.locked = False
+                self._edge_dwell_time = 0.0
+
     def reset(self, pos=None):
         """
         Resets the target's lock state while preserving position if specified.
@@ -481,6 +518,9 @@ class MovingMode_locking(MovingMode):
         if pos is not None:
             super().reset(pos)
         self.locked = False
+        # Reset dwell timer and timebase
+        self._edge_dwell_time = 0.0
+        self._last_update_time = core.getTime()
 
 
 class MovingMode_bouncing(MovingMode):
