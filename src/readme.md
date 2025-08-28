@@ -49,6 +49,41 @@ Sound effects are used in both experiments:
 - Sounds play when participants look at either side of the screen for a configurable duration
 - Each sound plays only once per trial per side
 
+### Locking Mode: Edge-Dwell Central Cue
+
+When participants look near the screen edge or outside the monitor area for a sustained period in locking mode, a central flashing ring cue appears to guide attention back toward the center. The cue disappears once gaze returns to the safe zone.
+
+- Enabled only for the `locking` movement mode
+- Triggered after a dwell period spent near/outside the edge
+- Flashing ring draws attention; on/off durations are configurable
+- Disable by setting `enabled` to `False`
+
+Configuration lives under:
+
+```python
+config["moving_modes"]["locking"]["edge_cue"] = {
+    "enabled": True,
+    "zone_width": 0.05,  # distance from edge considered near-edge (height units)
+    "dwell_seconds": 3.0,  # dwell time near/outside before cue appears
+    "ring_radius": 0.06,  # central cue ring radius (height units)
+    "ring_color": "white",
+    "flash_on": 0.25,  # seconds ring visible per cycle
+    "flash_off": 0.25,  # seconds ring hidden per cycle
+}
+```
+
+Per-frame logs include the following fields for analysis:
+
+- `near_edge`: whether gaze/controller is within the near-edge zone
+- `outside_bounds`: whether gaze/controller is outside the screen bounds
+- `edge_dwell_s`: seconds accumulated near/outside edge (resets on return)
+- `cue_active`: whether the center ring is currently active
+
+Notes:
+- `zone_width` is measured in PsychoPy height units; edges are based on the current window aspect and `config["experiment"]["screen_margin"]`.
+- The cue is rendered internally by the locking mode and requires no extra calls from the main loop.
+- `config["experiment"]["show_pos_indicator"] = True` can help visualize gaze/mouse position while tuning.
+
 ## Configuration Parameters
 
 ### Experiment 1
@@ -59,6 +94,18 @@ Sound effects are used in both experiments:
 - `N_trials_exp2`: Total number of trials (recommended to be a multiple of 4)
 - `effective_trial_duration_exp2`: Duration of each trial, excluding time when gaze is not detected
 - `sound_play_gaze_duration`: Duration participant must look at a side to trigger sound
+
+### Moving Modes: Locking Edge Cue
+
+All parameters live under `config["moving_modes"]["locking"]["edge_cue"]`:
+
+- `enabled`: turn the center cue on/off (default: True)
+- `zone_width`: near-edge zone width in height units (default: 0.05)
+- `dwell_seconds`: delay before cue appears when near/outside (default: 3.0)
+- `ring_radius`: cue ring radius in height units (default: 0.06)
+- `ring_color`: cue ring color (default: "white")
+- `flash_on`: seconds the ring is visible per cycle (default: 0.25)
+- `flash_off`: seconds the ring is hidden per cycle (default: 0.25)
 
 
 # Data Collection and Analysis

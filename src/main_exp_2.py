@@ -309,7 +309,7 @@ class DataManager_Exp2:
             print(f"Data file closed: {self.data_path_exp}")
             self.file = None
 
-def run_experiment_2(controller_type='tobii'):
+def run_experiment_2():
     """
     Main function to run Experiment 2.
     """
@@ -357,6 +357,7 @@ def run_experiment_2(controller_type='tobii'):
     )
     
     # Initialize controller (eye tracker or mouse)
+    controller_type = config_exp1["controller"]["type"]
     if controller_type == 'tobii':
         controller = TobiiController(
             win=win, stabilizer_type=config_exp1["tobii"]["stabilizer_type"])

@@ -16,7 +16,7 @@ import time
 
 config = {
     "design": {
-        "trial_duration": 2,  # in seconds
+        "trial_duration": 20,  # in seconds
         "number_of_trial": 20
     },
     "experiment": {
@@ -30,8 +30,21 @@ config = {
             "movie": ["src/movies/countdown_6_seconds_300x300.mp4"]  # Movie to play during the break
         },
     },
+    "moving_modes": {
+        "locking": {
+            "edge_cue": {
+                "enabled": True,
+                "zone_width": 0.05,  # Distance from screen edge considered "near edge" (height units)
+                "dwell_seconds": 3.0,  # How long near/outside edge before cue appears
+                "ring_radius": 0.06,  # Radius of the central cue ring (height units)
+                "ring_color": "white",
+                "flash_on": 0.25,  # seconds visible per flash cycle
+                "flash_off": 0.25  # seconds hidden per flash cycle
+            }
+        }
+    },
     "controller": {
-        "type": "mouse",  # Options: 'mouse' or 'tobii'
+        "type": "tobii",  # Options: 'mouse' or 'tobii'
     },
     "tobii": {
         "calibration": False,  # Whether to perform calibration
@@ -179,6 +192,30 @@ def bring_back_to_screen(pos, horizontal_limit, vertical_limit):
         pos[1] = vertical_limit
 
     return pos
+
+def check_near_edge_or_outside(pos, horizontal_limit, vertical_limit, edge_zone):
+    """
+    Determine whether a position is near the screen edge or outside the monitor bounds.
+
+    Args:
+        pos (array-like): Position (x, y) in 'height' units.
+        horizontal_limit (float): Half-width of screen in 'height' units.
+        vertical_limit (float): Half-height of screen in 'height' units.
+        edge_zone (float): Distance from the edge considered as "near-edge".
+
+    Returns:
+        tuple[bool, bool]: (is_near_edge, is_outside)
+    """
+    x = float(pos[0])
+    y = float(pos[1])
+    is_outside = abs(x) > horizontal_limit or abs(y) > vertical_limit
+    if is_outside:
+        return False, True
+
+    dist_to_edge_x = horizontal_limit - abs(x)
+    dist_to_edge_y = vertical_limit - abs(y)
+    is_near_edge = (dist_to_edge_x <= edge_zone) or (dist_to_edge_y <= edge_zone)
+    return is_near_edge, False
 
 def run_tobii_calibration(tobii_controller, num_points=5):
     """
@@ -420,6 +457,23 @@ class MovingMode(ABC):
         self.pos = np.array(
             pos, dtype=np.float64)  # Ensure position is float64
 
+    def draw_overlay(self):
+        """
+        Optional per-mode overlay (e.g., cues). Default: do nothing.
+        """
+        return
+
+    def get_cue_state(self):
+        """
+        Returns cue-related state for logging.
+        """
+        return {
+            'near_edge': False,
+            'outside_bounds': False,
+            'edge_dwell_s': 0.0,
+            'cue_active': False,
+        }
+
 
 class MovingMode_locking(MovingMode):
     """
@@ -435,6 +489,38 @@ class MovingMode_locking(MovingMode):
         # Add boundary limits like in other moving modes
         self.horizontal_limit = 0.5 * win.aspect - config["experiment"]["screen_margin"]
         self.vertical_limit = 0.5 - config["experiment"]["screen_margin"]
+
+        # Edge cue configuration
+        edge_cfg = config.get("moving_modes", {}).get("locking", {}).get("edge_cue", {})
+        self.edge_cue_enabled = bool(edge_cfg.get("enabled", False))
+        self.edge_zone = float(edge_cfg.get("zone_width", 0.05))
+        self.edge_dwell_seconds = float(edge_cfg.get("dwell_seconds", 3.0))
+        self.ring_radius = float(edge_cfg.get("ring_radius", 0.06))
+        self.ring_color = edge_cfg.get("ring_color", "white")
+        self.flash_on = float(edge_cfg.get("flash_on", 0.25))
+        self.flash_off = float(edge_cfg.get("flash_off", 0.25))
+
+        # Edge cue state
+        self.edge_dwell_accum = 0.0
+        self.cue_active = False
+        self.cue_flash_timer = 0.0
+        self.cue_flash_state_on = True
+        self.near_edge = False
+        self.outside_bounds = False
+        self._last_time = core.getTime()
+
+        # Visual for central ring cue
+        self.center_ring = None
+        if self.edge_cue_enabled:
+            self.center_ring = visual.Circle(
+                win,
+                radius=self.ring_radius,
+                edges=64,
+                lineColor=self.ring_color,
+                fillColor=None,
+                lineWidth=4.0,
+            )
+            self.center_ring.setPos((0, 0))
 
     def update(self, position=None, margin_control=False):
         """
@@ -471,6 +557,46 @@ class MovingMode_locking(MovingMode):
             # Update position with constrained values
             self.pos = np.array([x, y], dtype=np.float64)
 
+        # Edge dwell / cue logic based on controller/gaze position
+        if self.edge_cue_enabled and (position is not None):
+            now = core.getTime()
+            dt = now - self._last_time
+            self._last_time = now
+
+            # Determine near-edge or outside bounds relative to gaze/controller position
+            xg = float(position[0])
+            yg = float(position[1])
+            self.outside_bounds = abs(xg) > self.horizontal_limit or abs(yg) > self.vertical_limit
+            if self.outside_bounds:
+                self.near_edge = False
+            else:
+                dist_to_edge_x = self.horizontal_limit - abs(xg)
+                dist_to_edge_y = self.vertical_limit - abs(yg)
+                self.near_edge = (dist_to_edge_x <= self.edge_zone) or (dist_to_edge_y <= self.edge_zone)
+
+            if self.near_edge or self.outside_bounds:
+                self.edge_dwell_accum += dt
+            else:
+                self.edge_dwell_accum = 0.0
+
+            if (not self.cue_active) and self.edge_dwell_accum >= self.edge_dwell_seconds:
+                self.cue_active = True
+                self.cue_flash_timer = 0.0
+                self.cue_flash_state_on = True
+
+            if self.cue_active and (not self.near_edge) and (not self.outside_bounds):
+                self.cue_active = False
+                self.edge_dwell_accum = 0.0
+
+            if self.cue_active:
+                self.cue_flash_timer += dt
+                if self.cue_flash_state_on and self.cue_flash_timer >= self.flash_on:
+                    self.cue_flash_state_on = False
+                    self.cue_flash_timer = 0.0
+                elif (not self.cue_flash_state_on) and self.cue_flash_timer >= self.flash_off:
+                    self.cue_flash_state_on = True
+                    self.cue_flash_timer = 0.0
+
     def reset(self, pos=None):
         """
         Resets the target's lock state while preserving position if specified.
@@ -481,6 +607,26 @@ class MovingMode_locking(MovingMode):
         if pos is not None:
             super().reset(pos)
         self.locked = False
+        # Reset edge cue state as well
+        self.edge_dwell_accum = 0.0
+        self.cue_active = False
+        self.cue_flash_timer = 0.0
+        self.cue_flash_state_on = True
+        self.near_edge = False
+        self.outside_bounds = False
+        self._last_time = core.getTime()
+
+    def draw_overlay(self):
+        if self.edge_cue_enabled and self.cue_active and self.cue_flash_state_on and self.center_ring is not None:
+            self.center_ring.draw()
+
+    def get_cue_state(self):
+        return {
+            'near_edge': bool(self.near_edge),
+            'outside_bounds': bool(self.outside_bounds),
+            'edge_dwell_s': float(self.edge_dwell_accum),
+            'cue_active': bool(self.cue_active),
+        }
 
 
 class MovingMode_bouncing(MovingMode):
@@ -1160,6 +1306,8 @@ def run_exp(controller_type='tobii'):
 
             # Draw the target, trial counter, and mode display
             target.draw()
+            # Draw any overlays from the current mode (e.g., central ring cue)
+            current_mode.draw_overlay()
     
             # Draw position indicator if enabled
             if pos_indicator is not None:
@@ -1183,6 +1331,7 @@ def run_exp(controller_type='tobii'):
                 return
 
             # log data - update to use mode directly instead of stim_idx
+            cue_state = current_mode.get_cue_state()
             frame_data = {
                 'eye_raw_x': controller_raw_pos[0],
                 'eye_raw_y': controller_raw_pos[1],
@@ -1198,6 +1347,10 @@ def run_exp(controller_type='tobii'):
                 'moving_mode': mode,
                 'image_file': design.moving_mode_to_image[mode] if target_type == 'image' else 'None',
                 'sound_file': design.moving_mode_to_sound[mode] if config["stimulus"]["sound"]["play"] else 'None',
+                'near_edge': bool(cue_state.get('near_edge', False)),
+                'outside_bounds': bool(cue_state.get('outside_bounds', False)),
+                'edge_dwell_s': float(cue_state.get('edge_dwell_s', 0.0)),
+                'cue_active': bool(cue_state.get('cue_active', False)),
             }
             data_manager.log_data(frame_data)
 
