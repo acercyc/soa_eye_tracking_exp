@@ -33,11 +33,14 @@ config = {
     "moving_modes": {
         "locking": {
             "edge_cue": {
+                "type": "image",  # Options: 'ring' or 'image'
                 "enabled": True,
                 "zone_width": 0.05,  # Distance from screen edge considered "near edge" (height units)
                 "dwell_seconds": 3.0,  # How long near/outside edge before cue appears
                 "ring_radius": 0.06,  # Radius of the central cue ring (height units)
                 "ring_color": "white",
+                "image_file": "src/images_fun/star.png",  # Used when type == 'image'
+                "image_scale": 0.12,  # Height-unit size for image cue
                 "flash_on": 0.25,  # seconds visible per flash cycle
                 "flash_off": 0.25  # seconds hidden per flash cycle
             }
@@ -492,11 +495,14 @@ class MovingMode_locking(MovingMode):
 
         # Edge cue configuration
         edge_cfg = config.get("moving_modes", {}).get("locking", {}).get("edge_cue", {})
+        self.cue_type = edge_cfg.get("type", "ring")
         self.edge_cue_enabled = bool(edge_cfg.get("enabled", False))
         self.edge_zone = float(edge_cfg.get("zone_width", 0.05))
         self.edge_dwell_seconds = float(edge_cfg.get("dwell_seconds", 3.0))
         self.ring_radius = float(edge_cfg.get("ring_radius", 0.06))
         self.ring_color = edge_cfg.get("ring_color", "white")
+        self.image_file = edge_cfg.get("image_file", "src/images_fun/star.png")
+        self.image_scale = float(edge_cfg.get("image_scale", 0.12))
         self.flash_on = float(edge_cfg.get("flash_on", 0.25))
         self.flash_off = float(edge_cfg.get("flash_off", 0.25))
 
@@ -509,18 +515,31 @@ class MovingMode_locking(MovingMode):
         self.outside_bounds = False
         self._last_time = core.getTime()
 
-        # Visual for central ring cue
+        # Visual for central cue (ring or image)
         self.center_ring = None
+        self.center_image = None
         if self.edge_cue_enabled:
-            self.center_ring = visual.Circle(
-                win,
-                radius=self.ring_radius,
-                edges=64,
-                lineColor=self.ring_color,
-                fillColor=None,
-                lineWidth=4.0,
-            )
-            self.center_ring.setPos((0, 0))
+            if self.cue_type == 'image':
+                try:
+                    self.center_image = visual.ImageStim(
+                        win,
+                        image=self.image_file,
+                        size=self.image_scale,
+                    )
+                    self.center_image.setPos((0, 0))
+                except Exception as e:
+                    print(f"Failed to load image cue '{self.image_file}': {e}. Falling back to ring cue.")
+                    self.cue_type = 'ring'
+            if self.cue_type == 'ring':
+                self.center_ring = visual.Circle(
+                    win,
+                    radius=self.ring_radius,
+                    edges=64,
+                    lineColor=self.ring_color,
+                    fillColor=None,
+                    lineWidth=4.0,
+                )
+                self.center_ring.setPos((0, 0))
 
     def update(self, position=None, margin_control=False):
         """
@@ -617,7 +636,11 @@ class MovingMode_locking(MovingMode):
         self._last_time = core.getTime()
 
     def draw_overlay(self):
-        if self.edge_cue_enabled and self.cue_active and self.cue_flash_state_on and self.center_ring is not None:
+        if not (self.edge_cue_enabled and self.cue_active and self.cue_flash_state_on):
+            return
+        if self.cue_type == 'image' and self.center_image is not None:
+            self.center_image.draw()
+        elif self.center_ring is not None:
             self.center_ring.draw()
 
     def get_cue_state(self):
